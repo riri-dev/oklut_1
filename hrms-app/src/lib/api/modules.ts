@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase'
-import type { PerformanceGoal, PerformanceReview, JobOpening, Candidate, Interview, Offer, AuditLog } from '@/lib/database.types'
+import type { PerformanceGoal, PerformanceReview, JobOpening, Candidate, Interview, Offer, AuditLog, InterviewSlot } from '@/lib/database.types'
 
 // ---------- Performance ----------
 export async function fetchPerformanceGoals(employeeId?: string) {
@@ -126,17 +126,41 @@ export async function createCandidate(input: {
   cover_letter?: string
   source?: string
   ats_score?: number
+  category?: string
+  candidate_id?: string
 }) {
-  const { ats_score, ...dbInput } = input
-  const { data, error } = await supabase.from('candidates').insert(dbInput).select().single()
+  // create_candidate_with_auth (migration 0010) creates the candidates row AND
+  // the linked auth.users account (password 1234) so the candidate can log into
+  // the candidate portal with the returned temp_id.
+  const { data, error } = await supabase.rpc('create_candidate_with_auth', {
+    p_name: input.name,
+    p_email: input.email,
+    p_phone: input.phone ?? null,
+    p_job_opening_id: input.job_opening_id ?? null,
+    p_source: input.source ?? null,
+    p_resume_url: input.resume_url ?? null,
+    p_cover_letter: input.cover_letter ?? null,
+    p_category: input.category ?? 'Fresher',
+  })
   if (error) throw error
-  return data as Candidate
+  return { id: '', name: input.name, email: input.email, temp_id: data as string } as unknown as Candidate
 }
 
 export async function updateCandidateStatus(id: string, status: string) {
   const { data, error } = await supabase
     .from('candidates')
     .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single()
+  if (error) throw error
+  return data as Candidate
+}
+
+export async function updateCandidate(id: string, patch: Partial<Candidate>) {
+  const { data, error } = await supabase
+    .from('candidates')
+    .update({ ...patch, updated_at: new Date().toISOString() })
     .eq('id', id)
     .select()
     .single()
@@ -159,29 +183,95 @@ export async function fetchInterviews() {
 }
 
 export async function createInterview(input: {
-  candidate_id: string
+  candidate_id?: string
   job_opening_id?: string
   interviewer_id?: string
   round?: string
   scheduled_at: string
   mode?: string
   meeting_link?: string
+  slot_key?: string
 }) {
-  const { data, error } = await supabase.from('interviews').insert(input).select().single()
+  const { data, error } = await supabase.from('interviews').insert({ ...input, candidate_confirmed: true }).select().single()
   if (error) throw error
   return data as Interview
 }
 
-export async function updateInterviewStatus(id: string, status: string, feedback?: string, rating?: number) {
+export async function updateInterviewStatus(id: string, status: string, feedback?: string, rating?: number, metrics?: Record<string, number>) {
   const { data, error } = await supabase
     .from('interviews')
-    .update({ status, feedback: feedback ?? null, rating: rating ?? null })
+    .update({ status, feedback: feedback ?? null, rating: rating ?? null, metrics: metrics ?? null })
     .eq('id', id)
     .select()
     .single()
   if (error) throw error
   return data as Interview
 }
+
+// ---------- Interview slots (recruiter-published pool) ----------
+export async function fetchInterviewSlots(jobOpeningId?: string) {
+  let query = supabase.from('interview_slots').select('*').order('scheduled_at')
+  if (jobOpeningId) query = query.eq('job_opening_id', jobOpeningId)
+  const { data, error } = await query
+  if (error) throw error
+  return (data ?? []) as InterviewSlot[]
+}
+
+export async function createInterviewSlot(input: {
+  job_opening_id: string
+  round: string
+  scheduled_at: string
+  meeting_link?: string
+  max_candidates?: number
+}) {
+  const { data: session } = await supabase.auth.getSession()
+  const { data, error } = await supabase
+    .from('interview_slots')
+    .insert({ ...input, max_candidates: input.max_candidates ?? 1, created_by: session.session?.user.id ?? null })
+    .select()
+    .single()
+  if (error) throw error
+  return data as InterviewSlot
+}
+
+export async function updateInterviewSlot(id: string, patch: Partial<InterviewSlot>) {
+  const { data, error } = await supabase.from('interview_slots').update(patch).eq('id', id).select().single()
+  if (error) throw error
+  return data as InterviewSlot
+}
+
+export async function deleteInterviewSlot(id: string) {
+  const { error } = await supabase.from('interview_slots').delete().eq('id', id)
+  if (error) throw error
+}
+
+/**
+ * Admin review of a candidate's reschedule request.
+ * approve → the interview moves to the candidate's preferred time.
+ * reject → the request is closed; the candidate must pick an available slot
+ *          or the round ends in disqualification once all slots elapse.
+ */
+export async function reviewRescheduleRequest(id: string, decision: 'approve' | 'reject', preferredTime?: string, adminNote?: string) {
+  const patch =
+    decision === 'approve'
+      ? {
+          scheduled_at: preferredTime ?? null,
+          reschedule_requested: false,
+          reschedule_status: 'accepted',
+          reschedule_admin_note: adminNote ?? null,
+          status: 'scheduled',
+          candidate_confirmed: true,
+        }
+      : {
+          reschedule_requested: false,
+          reschedule_status: 'rejected',
+          reschedule_admin_note: adminNote ?? null,
+        }
+  const { data, error } = await supabase.from('interviews').update(patch).eq('id', id).select().single()
+  if (error) throw error
+  return data as Interview
+}
+
 
 export async function fetchOffers() {
   const { data, error } = await supabase
@@ -197,6 +287,10 @@ export async function createOffer(input: {
   job_opening_id?: string
   salary_offered?: number
   joining_date?: string
+  service_bond_years?: number | null
+  relocation_required?: boolean
+  relocation_location?: string | null
+  salary_breakdown?: { base_salary: number; variable: number; allowances: number; gross_total: number } | null
   status?: string
 }) {
   const { data: session } = await supabase.auth.getSession()
@@ -205,6 +299,12 @@ export async function createOffer(input: {
     .insert({ ...input, issued_by: session.session?.user.id ?? null })
     .select()
     .single()
+  if (error) throw error
+  return data as Offer
+}
+
+export async function updateOffer(id: string, patch: Partial<Offer>) {
+  const { data, error } = await supabase.from('offers').update(patch).eq('id', id).select().single()
   if (error) throw error
   return data as Offer
 }

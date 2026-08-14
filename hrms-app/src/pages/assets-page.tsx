@@ -3,7 +3,6 @@ import { supabase } from '@/lib/supabase'
 import { PageHeader } from '@/components/shared/page-header'
 import { useAuth } from '@/features/auth/auth-context'
 import type { Asset, AssetIncident, Employee } from '@/lib/database.types'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -32,7 +31,7 @@ export default function AssetsPage() {
   const [type, setType] = useState('Laptop')
   const [serial, setSerial] = useState('')
   const [assignedTo, setAssignedTo] = useState('')
-  const [status, setStatus] = useState('Active')
+  const [status] = useState('Active')
 
   // Incident Form State
   const [incidentAssetId, setIncidentAssetId] = useState('')

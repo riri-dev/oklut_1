@@ -1,0 +1,25 @@
+{
+  "name": "hrms_app",
+  "version": "1.0.0",
+  "description": "HRMS_Project",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Suryani-76/HRMS_app.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Suryani-76/HRMS_app/issues"
+  },
+  "homepage": "https://github.com/Suryani-76/HRMS_app#readme",
+  "dependencies": {
+    "opencode-ai": "^1.18.18"
+  },
+  "allowScripts": {
+    "opencode-ai@1.18.18": true
+  }
+}

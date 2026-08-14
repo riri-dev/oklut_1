@@ -112,6 +112,65 @@ values (
   'email', now(), now()
 ) on conflict (provider_id, provider) do nothing;
 
+-- ========================================================
+-- 1. KAVYA (Candidate 1)
+-- ========================================================
+insert into auth.users (
+  id, instance_id, aud, role, email, encrypted_password,
+  email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data,
+  confirmation_token, recovery_token, email_change_token_new, email_change
+) values (
+  '00000000-0000-0000-0000-000000000040',
+  '00000000-0000-0000-0000-000000000000',
+  'authenticated', 'authenticated',
+  'kavya@oklut.com',
+  extensions.crypt('1234', extensions.gen_salt('bf')),
+  now(), now(), now(),
+  '{"provider":"email","providers":["email"]}',
+  '{"name":"Kavya","role":"Candidate"}',
+  '', '', '', ''
+) on conflict (id) do update set
+  encrypted_password = extensions.crypt('1234', extensions.gen_salt('bf')),
+  email_confirmed_at = now(),
+  updated_at = now();
+
+insert into auth.identities (id, provider_id, user_id, identity_data, provider, created_at, updated_at)
+values (
+  gen_random_uuid(), '00000000-0000-0000-0000-000000000040', '00000000-0000-0000-0000-000000000040',
+  '{"sub":"00000000-0000-0000-0000-000000000040","email":"kavya@oklut.com","email_verified":true}',
+  'email', now(), now()
+) on conflict (provider_id, provider) do nothing;
+
+
+-- ========================================================
+-- 2. SIDDHARTH ROY (Candidate 2)
+-- ========================================================
+insert into auth.users (
+  id, instance_id, aud, role, email, encrypted_password,
+  email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data,
+  confirmation_token, recovery_token, email_change_token_new, email_change
+) values (
+  '00000000-0000-0000-0000-000000000050',
+  '00000000-0000-0000-0000-000000000000',
+  'authenticated', 'authenticated',
+  'siddharth@oklut.com',
+  extensions.crypt('1234', extensions.gen_salt('bf')),
+  now(), now(), now(),
+  '{"provider":"email","providers":["email"]}',
+  '{"name":"Siddharth Roy","role":"Candidate"}',
+  '', '', '', ''
+) on conflict (id) do update set
+  encrypted_password = extensions.crypt('1234', extensions.gen_salt('bf')),
+  email_confirmed_at = now(),
+  updated_at = now();
+
+insert into auth.identities (id, provider_id, user_id, identity_data, provider, created_at, updated_at)
+values (
+  gen_random_uuid(), '00000000-0000-0000-0000-000000000050', '00000000-0000-0000-0000-000000000050',
+  '{"sub":"00000000-0000-0000-0000-000000000050","email":"siddharth@oklut.com","email_verified":true}',
+  'email', now(), now()
+) on conflict (provider_id, provider) do nothing;
+
 -- Verify: should return 4 rows
 select id, email, email_confirmed_at from auth.users
 where email in ('ceo@oklut.com','hr@oklut.com','employee@oklut.com','designer@oklut.com');

@@ -25,6 +25,7 @@ export const queryKeys = {
   jobOpenings: ['jobOpenings'] as const,
   candidates: ['candidates'] as const,
   interviews: ['interviews'] as const,
+  interviewSlots: ['interviewSlots'] as const,
   offers: ['offers'] as const,
   notifications: ['notifications'] as const,
   auditLogs: ['auditLogs'] as const,

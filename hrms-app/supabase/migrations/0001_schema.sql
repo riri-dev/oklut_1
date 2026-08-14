@@ -6,6 +6,74 @@
 create extension if not exists "pgcrypto";
 create extension if not exists "uuid-ossp";
 
+create table public.roles (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  description text,
+  created_at timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------------
+-- Departments & Designations
+-- ---------------------------------------------------------------------------
+
+create table public.departments (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  code text unique,
+  description text,
+  head_id uuid,
+  created_at timestamptz not null default now()
+);
+
+create table public.designations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  department_id uuid references public.departments(id) on delete set null,
+  level int not null default 1,
+  created_at timestamptz not null default now(),
+  unique (name, department_id)
+);
+
+
+create table public.employees (
+  id uuid primary key default gen_random_uuid(),
+  employee_code text unique,
+  user_id uuid unique references auth.users(id) on delete set null,
+  first_name text not null,
+  last_name text not null,
+  email text not null unique,
+  phone text,
+  gender text,
+  date_of_birth date,
+  address text,
+  city text,
+  state text,
+  country text,
+  postal_code text,
+  marital_status text,
+  blood_group text,
+  joining_date date not null default current_date,
+  employment_type text not null default 'Full-time',
+  department_id uuid references public.departments(id) on delete set null,
+  designation_id uuid references public.designations(id) on delete set null,
+  manager_id uuid references public.employees(id) on delete set null,
+  status text not null default 'Active',
+  profile_picture_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.users (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text not null unique,
+  role_id uuid not null references public.roles(id),
+  employee_id uuid references public.employees(id) on delete set null,
+  status text not null default 'Active',
+  last_login_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
 -- ---------------------------------------------------------------------------
 -- Helper functions
 -- ---------------------------------------------------------------------------
@@ -45,12 +113,7 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Roles & Permissions
 -- ---------------------------------------------------------------------------
-create table public.roles (
-  id uuid primary key default gen_random_uuid(),
-  name text not null unique,
-  description text,
-  created_at timestamptz not null default now()
-);
+
 
 create table public.permissions (
   id uuid primary key default gen_random_uuid(),
@@ -65,67 +128,10 @@ create table public.role_permissions (
   primary key (role_id, permission_id)
 );
 
--- ---------------------------------------------------------------------------
--- Departments & Designations
--- ---------------------------------------------------------------------------
-create table public.departments (
-  id uuid primary key default gen_random_uuid(),
-  name text not null unique,
-  code text unique,
-  description text,
-  head_id uuid,
-  created_at timestamptz not null default now()
-);
-
-create table public.designations (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  department_id uuid references public.departments(id) on delete set null,
-  level int not null default 1,
-  created_at timestamptz not null default now(),
-  unique (name, department_id)
-);
 
 -- ---------------------------------------------------------------------------
 -- Users (profiles) & Employees
 -- ---------------------------------------------------------------------------
-create table public.employees (
-  id uuid primary key default gen_random_uuid(),
-  employee_code text unique,
-  user_id uuid unique references auth.users(id) on delete set null,
-  first_name text not null,
-  last_name text not null,
-  email text not null unique,
-  phone text,
-  gender text,
-  date_of_birth date,
-  address text,
-  city text,
-  state text,
-  country text,
-  postal_code text,
-  marital_status text,
-  blood_group text,
-  joining_date date not null default current_date,
-  employment_type text not null default 'Full-time',
-  department_id uuid references public.departments(id) on delete set null,
-  designation_id uuid references public.designations(id) on delete set null,
-  manager_id uuid references public.employees(id) on delete set null,
-  status text not null default 'Active',
-  profile_picture_url text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create table public.users (
-  id uuid primary key references auth.users(id) on delete cascade,
-  email text not null unique,
-  role_id uuid not null references public.roles(id),
-  employee_id uuid references public.employees(id) on delete set null,
-  status text not null default 'Active',
-  last_login_at timestamptz,
-  created_at timestamptz not null default now()
-);
 
 alter table public.departments
   add constraint departments_head_fk foreign key (head_id) references public.employees(id) on delete set null;
@@ -349,6 +355,9 @@ create table public.job_openings (
 
 create table public.candidates (
   id uuid primary key default gen_random_uuid(),
+  temp_id text unique, 
+  user_id uuid references auth.users(id) on delete set null,
+  candidate_id text unique,
   job_opening_id uuid references public.job_openings(id) on delete set null,
   name text not null,
   email text not null,

@@ -2,7 +2,7 @@
 
 -- Recruitment
 alter table public.candidates
-  add column if not exists reference_id text unique,
+  add column if not exists candidate_id text unique,
   add column if not exists referred_by uuid references public.users(id) on delete set null,
   add column if not exists ats_score numeric(5,2);
 

@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { supabase } from '@/lib/supabase'
 import type { JobOpening } from '@/lib/database.types'
 import { toast } from 'sonner'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 
 export default function CareersPage() {
   const [jobs, setJobs] = useState<JobOpening[]>([])
@@ -48,26 +48,24 @@ export default function CareersPage() {
     if (!selectedJob || !name || !email) return
     setIsSubmitting(true)
     
-    // Auto-generate reference_id
-    const refId = 'REF-' + Math.random().toString(36).substring(2, 8).toUpperCase()
-    // Simulated ATS score for demo purposes (random 60-100)
-    const atsScore = Math.floor(Math.random() * (100 - 60 + 1)) + 60
-
-    const { error } = await supabase.from('candidates').insert({
-      job_opening_id: selectedJob.id,
-      name,
-      email,
-      phone,
-      resume_url: resumeUrl,
-      cover_letter: coverLetter,
-      source: `Careers Page (ATS: ${atsScore})`
+    // create_candidate_with_auth creates the candidate + portal auth account
+    // (password 1234). The returned temp_id is the candidate's portal login ID.
+    const { data, error } = await supabase.rpc('create_candidate_with_auth', {
+      p_name: name,
+      p_email: email,
+      p_phone: phone || null,
+      p_job_opening_id: selectedJob.id,
+      p_source: 'Careers Page',
+      p_resume_url: resumeUrl || null,
+      p_cover_letter: coverLetter || null,
+      p_category: 'Fresher',
     })
 
     setIsSubmitting(false)
     if (error) {
       toast.error('Failed to submit application: ' + error.message)
     } else {
-      toast.success(`Application submitted! Your Reference ID is ${refId}`)
+      toast.success(`Application received! Your portal login ID is ${data} (password 1234)`)
       setSelectedJob(null)
       setName('')
       setEmail('')

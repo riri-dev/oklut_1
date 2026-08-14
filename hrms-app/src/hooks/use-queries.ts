@@ -15,6 +15,7 @@ import type {
   JobOpening,
   LeaveRequest,
   Notification,
+  Offer,
   Payroll,
   PerformanceGoal,
   PerformanceReview,
@@ -434,6 +435,14 @@ export function useUpdateCandidateStatus() {
     onError: toastError,
   })
 }
+export function useUpdateCandidate() {
+  const { invalidate, toastError } = useInvalidate()
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Partial<Candidate> }) => api.updateCandidate(id, patch),
+    onSuccess: () => { invalidate([queryKeys.candidates]); toast.success('Candidate updated') },
+    onError: toastError,
+  })
+}
 export function useDeleteCandidate() {
   const { invalidate, toastError } = useInvalidate()
   return useMutation({
@@ -456,9 +465,41 @@ export function useCreateInterview() {
 export function useUpdateInterviewStatus() {
   const { invalidate, toastError } = useInvalidate()
   return useMutation({
-    mutationFn: ({ id, status, feedback, rating }: { id: string; status: string; feedback?: string; rating?: number }) =>
-      api.updateInterviewStatus(id, status, feedback, rating),
+    mutationFn: ({ id, status, feedback, rating, metrics }: { id: string; status: string; feedback?: string; rating?: number; metrics?: Record<string, number> }) =>
+      api.updateInterviewStatus(id, status, feedback, rating, metrics),
     onSuccess: () => { invalidate([queryKeys.interviews]); toast.success('Interview updated') },
+    onError: toastError,
+  })
+}
+export function useInterviewSlots(jobOpeningId?: string) {
+  return useQuery({
+    queryKey: [...queryKeys.interviewSlots, jobOpeningId],
+    queryFn: () => api.fetchInterviewSlots(jobOpeningId),
+    enabled: !!jobOpeningId,
+  })
+}
+export function useCreateInterviewSlot() {
+  const { invalidate, toastError } = useInvalidate()
+  return useMutation({
+    mutationFn: api.createInterviewSlot,
+    onSuccess: () => { invalidate([queryKeys.interviewSlots]); toast.success('Interview slot added') },
+    onError: toastError,
+  })
+}
+export function useDeleteInterviewSlot() {
+  const { invalidate, toastError } = useInvalidate()
+  return useMutation({
+    mutationFn: api.deleteInterviewSlot,
+    onSuccess: () => { invalidate([queryKeys.interviewSlots]); toast.success('Interview slot removed') },
+    onError: toastError,
+  })
+}
+export function useReviewRescheduleRequest() {
+  const { invalidate, toastError } = useInvalidate()
+  return useMutation({
+    mutationFn: ({ id, decision, preferredTime, adminNote }: { id: string; decision: 'approve' | 'reject'; preferredTime?: string; adminNote?: string }) =>
+      api.reviewRescheduleRequest(id, decision, preferredTime, adminNote),
+    onSuccess: () => { invalidate([queryKeys.interviews, queryKeys.candidates]); toast.success('Reschedule request reviewed') },
     onError: toastError,
   })
 }
@@ -478,6 +519,14 @@ export function useUpdateOfferStatus() {
   return useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) => api.updateOfferStatus(id, status),
     onSuccess: () => { invalidate([queryKeys.offers, queryKeys.candidates]); toast.success('Offer updated') },
+    onError: toastError,
+  })
+}
+export function useUpdateOffer() {
+  const { invalidate, toastError } = useInvalidate()
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Partial<Offer> }) => api.updateOffer(id, patch),
+    onSuccess: () => { invalidate([queryKeys.offers]); toast.success('Offer updated') },
     onError: toastError,
   })
 }
@@ -511,4 +560,4 @@ export function useAuditLogs() {
   return useQuery({ queryKey: queryKeys.auditLogs, queryFn: api.fetchAuditLogs })
 }
 
-export type { Employee, Department, Designation, Attendance, LeaveRequest, Payroll, Document, Task, Announcement, Notification, Holiday, PerformanceGoal, PerformanceReview, JobOpening, Candidate, Interview }
+export type { Employee, Department, Designation, Attendance, LeaveRequest, Payroll, Document, Task, Announcement, Notification, Holiday, PerformanceGoal, PerformanceReview, JobOpening, Candidate, Interview, Offer }
