@@ -43,7 +43,6 @@ import {
   Timer,
   Award,
   PartyPopper,
-  MapPin,
   Video,
   AlertTriangle,
   FileText,
@@ -53,24 +52,23 @@ import {
   Moon,
   Bell,
   LogOut,
-  ExternalLink,
   Info,
   Loader2,
 } from 'lucide-react'
-import { formatDateTime, formatDate, formatCurrency } from '@/lib/format'
+import { formatDateTime, formatDate } from '@/lib/format'
 import { StatusPill } from '@/components/shared/status-pill'
 import { toast } from 'sonner'
-import { jsPDF } from 'jspdf'
-import autoTable from 'jspdf-autotable'
 import {
   DEFAULT_SCENARIO,
+  CANDIDATE_PROFILES,
+  getScenarioById,
   buildMockOffer,
+  type CandidateProfile,
   type PortalSnapshot,
   type MockCandidate,
   type MockJobOpening,
   type MockInterview,
   type MockOffer,
-  type MockSalaryBreakdown,
 } from './candidatePortalMocks'
 
 // ============================================================================
@@ -106,47 +104,31 @@ const ONE_HOUR_MS = 60 * 60 * 1000
 const isConfirmedBooking = (i: MockInterview) =>
   ['scheduled', 'ongoing'].includes(i.status ?? '') && (i.candidate_confirmed === true || !!i.candidate_id)
 
-function downloadOfferPdf(candidate: MockCandidate, offer: MockOffer, job?: MockJobOpening | null) {
-  const doc = new jsPDF()
-  doc.setFontSize(18)
-  doc.text('Oklut Technologies', 14, 20)
-  doc.setFontSize(11)
-  doc.setTextColor(60)
-  doc.text('Offer of Employment', 14, 28)
-  doc.setTextColor(0)
-  doc.setFontSize(10)
-
-  const breakdown: MockSalaryBreakdown = offer.salary_breakdown ?? {
-    base_salary: offer.salary_offered ?? 0,
-    variable: 0,
-    allowances: 0,
-    gross_total: offer.salary_offered ?? 0,
-  }
-
-  autoTable(doc, {
-    startY: 36,
-    head: [['Offer Terms & Conditions', '']],
-    body: [
-      ['Candidate Name', candidate.name],
-      ['Position', job?.title ?? '—'],
-      ['Joining Date', formatDate(offer.joining_date || '')],
-      ['Service Bond', offer.service_bond_years ? `${offer.service_bond_years} year(s)` : 'Not applicable'],
-      ['Relocation', offer.relocation_required ? `Required${offer.relocation_location ? ` — ${offer.relocation_location}` : ''}` : 'Not required'],
-      ['Base Salary (Annual)', formatCurrency(breakdown.base_salary)],
-      ['Variable Pay (Annual)', formatCurrency(breakdown.variable)],
-      ['Allowances (Annual)', formatCurrency(breakdown.allowances)],
-      ['Gross Total CTC (Annual)', formatCurrency(breakdown.gross_total)],
-    ],
-    styles: { fontSize: 10 },
-  })
-
-  doc.setFontSize(9)
-  doc.setTextColor(100)
-  const finalY = (doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY ?? 120
-  doc.text('By signing this offer letter, you agree to all the terms and conditions listed above.', 14, finalY + 10)
-  doc.text(`Offer generated on ${formatDateTime(new Date().toISOString())} for ${candidate.email}`, 14, finalY + 16)
-  doc.save(`offer-letter-${candidate.name.replace(/\s+/g, '-').toLowerCase()}.pdf`)
+// Live-window check — TRUE while `now` falls inside [window_start, window_end].
+// Accepts window_* or exam_* date fields from the snapshot job.
+const isWindowLive = (
+  startRaw: string | null | undefined,
+  endRaw: string | null | undefined
+): boolean => {
+  if (!startRaw || !endRaw) return false
+  const startMs = new Date(startRaw).getTime()
+  const endMs = new Date(endRaw).getTime()
+  if (isNaN(startMs) || isNaN(endMs)) return false
+  const nowMs = Date.now()
+  return nowMs >= startMs && nowMs <= endMs
 }
+
+// ============================================================================
+// Top navigation — theme toggle, notifications, sign out
+// ============================================================================
+
+
+
+
+
+
+
+
 
 // ============================================================================
 // Top navigation — theme toggle, notifications, sign out
@@ -379,8 +361,6 @@ export default function CandidatePortalPage() {
   const job = portal.job
   const interviews = portal.interviews
   const interviewSlots = portal.slots
-  const applications: MockCandidate[] = candidate ? [candidate] : []
-  const activeId = candidate?.id ?? ''
 
   // Slot capacities — every slot carries its own booked count in the snapshot.
   const slotBookedCounts = useMemo(() => {
@@ -413,7 +393,14 @@ export default function CandidatePortalPage() {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)))
   }
 
-  // Demo login — any ID/password works; the portal is fully frontend now.
+  // Resolve the login identity by Candidate ID. Every demo profile carries a
+  // unique candidate_id, so ID entry loads the exact journey snapshot.
+  const resolveProfile = (): CandidateProfile | null => {
+    const id = candidateId.trim().toUpperCase()
+    if (!id) return null
+    return CANDIDATE_PROFILES.find((p) => p.candidate_id.toUpperCase() === id) ?? null
+  }
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
     if (!candidateId.trim() || !password) {
@@ -422,9 +409,16 @@ export default function CandidatePortalPage() {
     }
     setLoading(true)
     setTimeout(() => {
+      const profile = resolveProfile()
+      const scenario = profile ? getScenarioById(profile.scenarioId) : null
+      setPortal(scenario ?? DEFAULT_SCENARIO)
+      setTermsAccepted(false)
+      setNotifications([])
+      dqEvaluated.current = null
+      firedReminderKeys.current = new Set()
       setSignedIn(true)
       setLoading(false)
-      toast.success('Login successful!')
+      toast.success(profile ? `Signed in as ${scenario?.candidate.name ?? 'candidate'}.` : 'Login successful!')
     }, 400)
   }
 
@@ -1319,25 +1313,22 @@ export default function CandidatePortalPage() {
         <div className="flex w-full flex-1 items-center justify-center p-4 py-12">
           <Card className="w-full max-w-md">
             <CardHeader>
-              <CardTitle>Login to View Application Status</CardTitle>
-              <CardDescription>Track your application status by entering your ID and Password.</CardDescription>
+              <CardTitle>Candidate Portal Login</CardTitle>
+              <CardDescription>Enter your credentials to view your application status</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleLogin} className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Candidate ID</Label>
-                  <Input required type="text" placeholder="Enter your Candidate ID" value={candidateId} onChange={(e) => setCandidateId(e.target.value)} />
+                  <Label htmlFor="candidate-id">Candidate ID</Label>
+                  <Input id="candidate-id" required type="text" placeholder="Enter your Candidate ID" value={candidateId} onChange={(e) => setCandidateId(e.target.value)} />
                 </div>
                 <div className="space-y-2">
-                  <Label>Password</Label>
-                  <Input required type="password" placeholder="Enter your password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                  <Label htmlFor="candidate-password">Password</Label>
+                  <Input id="candidate-password" required type="password" placeholder="Enter your password" value={password} onChange={(e) => setPassword(e.target.value)} />
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? 'Checking...' : 'View Status'}
+                  {loading ? 'Signing in...' : 'Sign In'}
                 </Button>
-                <p className="text-center text-xs text-muted-foreground">
-                  Demo mode — the portal runs fully in the browser. Any ID and password will work.
-                </p>
               </form>
             </CardContent>
           </Card>
@@ -1373,30 +1364,10 @@ export default function CandidatePortalPage() {
 
         <div className="grid gap-6 md:grid-cols-2">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <CardHeader>
               <CardTitle>Candidate Details</CardTitle>
-              {applications.length > 1 && (
-                <Badge variant="secondary" className="text-xs">{applications.length} applications</Badge>
-              )}
             </CardHeader>
             <CardContent className="space-y-4">
-              {applications.length > 1 && (
-                <div className="space-y-2">
-                  <Label>Application</Label>
-                  <Select value={activeId}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select application" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {applications.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.category} · {a.candidate_id ?? 'N/A'}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
               <div className="space-y-3">
                 <div className="flex items-center gap-3 border-b pb-3">
                   <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-lg font-semibold text-primary">
@@ -1496,7 +1467,7 @@ export default function CandidatePortalPage() {
                     return (
                       <div
                         key={round.key}
-                        className={`rounded-xl border p-4 transition-colors ${state === 'locked' ? 'opacity-60 bg-muted/40' : state === 'disqualified' ? 'border-destructive/40 bg-destructive/5' : 'bg-card'
+                        className={`rounded-xl border p-4 transition-colors ${state === 'locked' && round.key !== 'exam' ? 'opacity-60 bg-muted/40' : state === 'disqualified' ? 'border-destructive/40 bg-destructive/5' : 'bg-card'
                           }`}
                       >
                         <div className="flex items-center gap-3">
@@ -1576,7 +1547,7 @@ export default function CandidatePortalPage() {
                           </div>
                         )}
 
-                        {state !== 'locked' && state !== 'disqualified' && round.key === 'exam' && (
+                        {state !== 'disqualified' && round.key === 'exam' && (
                           <ExamRound
                             roundNumber={idx + 1}
                             roundState={state}
@@ -1854,7 +1825,8 @@ function ExamRound({
 
   const isBeforeStart = startTimeUtc > 0 && nowUtc < startTimeUtc
   const isAfterEnd = endTimeUtc > 0 && nowUtc > endTimeUtc
-  const isWithinWindow = startTimeUtc > 0 && endTimeUtc > 0 && nowUtc >= startTimeUtc && nowUtc <= endTimeUtc
+  // Live-window gate for the Take Exam CTA — derived from the snapshot window.
+  const isExamWindowLive = isWindowLive(windowStartRaw, windowEndRaw)
 
   // Unattempted because the window expired — feedback is N/A for this state.
   const examExpiredUnattempted =
@@ -1869,7 +1841,7 @@ function ExamRound({
   const examStatusText =
     examStartedAt != null
       ? 'Ongoing'
-      : isWithinWindow
+      : isExamWindowLive
         ? 'Live'
         : isBeforeStart
           ? 'Scheduled'
@@ -1879,12 +1851,12 @@ function ExamRound({
   const examStatusVariant =
     examStartedAt != null
       ? ('warning' as const)
-      : isWithinWindow
+      : isExamWindowLive
         ? ('success' as const)
         : isAfterEnd
           ? ('destructive' as const)
           : ('secondary' as const)
-  const canStartAssessment = isWithinWindow && examStartedAt == null
+  const canStartAssessment = isExamWindowLive && examStartedAt == null
 
   const handleStartAssessment = () => {
     if (!canStartAssessment) return
@@ -1894,9 +1866,9 @@ function ExamRound({
     onExamStarted(startedAt)
   }
 
-  // Cleared / failed — strict terminal view: result banner + feedback ONLY.
-  // No metadata grid, guidelines, or Start Assessment controls after the exam
-  // is finished.
+  // Cleared / failed — strict terminal view: a single result banner ONLY.
+  // The metadata grid, guidelines, and all exam controls collapse the moment
+  // the exam is over. Feedback is available via the stage badge/summary only.
   if (roundOver) {
     const passed = roundState === 'passed'
     return (
@@ -1927,14 +1899,6 @@ function ExamRound({
                     ? 'You did not attempt the assessment before the window closed.'
                     : 'You did not qualify in the Online Exam round.'}
             </p>
-            <Button variant="outline" size="sm" className="mt-3" onClick={onToggleFeedback}>
-              {showFeedback ? 'Hide Feedback' : 'View Feedback'}
-            </Button>
-            {showFeedback && (
-              <div className="mt-2 rounded-lg border bg-card/60 p-4 text-sm">
-                {examExpiredUnattempted ? 'N/A' : (examFeedback ?? 'Feedback will be published soon.')}
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -1951,90 +1915,95 @@ function ExamRound({
         </span>
       </div>
 
-      {examAwaitingEvaluation ? (
-        <div className="p-4 rounded-xl border bg-muted/40 flex items-start gap-3">
-          <div className="shrink-0 mt-0.5">
-            <Timer className="w-5 h-5 text-muted-foreground" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h4 className="font-semibold text-sm leading-tight">Exam Submitted — Awaiting Evaluation</h4>
-            <p className="text-xs mt-1 leading-normal opacity-90">
-              Your assessment has been received. Results will be published here once the evaluation is complete.
-            </p>
-            <Button variant="outline" size="sm" className="mt-3" onClick={onToggleFeedback}>
-              {showFeedback ? 'Hide Feedback' : 'View Feedback'}
-            </Button>
-            {showFeedback && (
-              <div className="mt-2 rounded-lg border bg-card/60 p-4 text-sm">
-                {examFeedback ?? 'Feedback will be published soon.'}
-              </div>
-            )}
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <div className="rounded-lg border p-3 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-                <Timer className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Total Duration</div>
-                <div className="font-semibold">{durationMins ?? '—'} Minutes</div>
-              </div>
+      <div className="rounded-lg border bg-card p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+              <Info className="h-4 w-4 text-primary" /> Exam Overview &amp; Guidelines
             </div>
-            <div className="rounded-lg border p-3 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-                <FileText className="h-4 w-4" />
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <div className="rounded-lg border p-3 flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Timer className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Total Duration</div>
+                  <div className="font-semibold">{durationMins ?? '—'} Minutes</div>
+                </div>
               </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Total Questions</div>
-                <div className="font-semibold">{totalQuestions ?? '—'} Questions</div>
+              <div className="rounded-lg border p-3 flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <FileText className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Total Questions</div>
+                  <div className="font-semibold">{totalQuestions ?? '—'} Questions</div>
+                </div>
               </div>
-            </div>
-            <div className="rounded-lg border p-3 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-                <Award className="h-4 w-4" />
+              <div className="rounded-lg border p-3 flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Award className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Total Marks / Score</div>
+                  <div className="font-semibold">{totalMarks ?? '—'} Marks</div>
+                </div>
               </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Total Marks / Score</div>
-                <div className="font-semibold">{totalMarks ?? '—'} Marks</div>
+              <div className="rounded-lg border p-3 flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <CheckCircle2 className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Passing Cutoff</div>
+                  <div className="font-semibold">{passingScore != null ? `${passingScore}%` : '—'}</div>
+                </div>
               </div>
-            </div>
-            <div className="rounded-lg border p-3 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-                <CheckCircle2 className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Passing Threshold</div>
-                <div className="font-semibold">{passingScore != null ? `${passingScore}% Minimum to qualify` : '—'}</div>
-              </div>
-            </div>
-            <div className="rounded-lg border p-3 flex items-center gap-3 sm:col-span-2 xl:col-span-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-                <CalendarClock className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Exam Window / Scheduled Time</div>
-                <div className="font-semibold">
-                  {windowStartRaw && windowEndRaw
-                    ? `${formatReadableUtcDate(windowStartRaw)} — ${formatReadableUtcDate(windowEndRaw)}`
-                    : '—'}
+              <div className="rounded-lg border p-3 flex items-center gap-3 sm:col-span-2 xl:col-span-2">
+                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <CalendarClock className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Exam Window / Scheduled Time</div>
+                  <div className="font-semibold">
+                    {windowStartRaw && windowEndRaw
+                      ? `${formatReadableUtcDate(windowStartRaw)} — ${formatReadableUtcDate(windowEndRaw)}`
+                      : '—'}
+                  </div>
                 </div>
               </div>
             </div>
+
+            <div className="mt-4 rounded-lg border bg-muted/40 p-4">
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                <ShieldAlert className="h-4 w-4 text-primary" /> Instructions &amp; Proctoring Rules
+              </div>
+              <ul className="list-disc pl-5 space-y-1.5 text-xs text-muted-foreground">
+                {guidelines.map((g, idx) => (
+                  <li key={idx}>{g}</li>
+                ))}
+              </ul>
+            </div>
           </div>
 
-          <div className="rounded-lg border bg-card p-4">
-            <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-              <Info className="h-4 w-4 text-primary" /> Candidate Instructions &amp; Guidelines
+          {examAwaitingEvaluation && (
+            <div className="p-4 rounded-xl border bg-muted/40 flex items-start gap-3">
+              <div className="shrink-0 mt-0.5">
+                <Timer className="w-5 h-5 text-muted-foreground" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-sm leading-tight">Exam Submitted — Awaiting Evaluation</h4>
+                <p className="text-xs mt-1 leading-normal opacity-90">
+                  Your assessment has been received. Results will be published here once the evaluation is complete.
+                </p>
+                <Button variant="outline" size="sm" className="mt-3" onClick={onToggleFeedback}>
+                  {showFeedback ? 'Hide Feedback' : 'View Feedback'}
+                </Button>
+                {showFeedback && (
+                  <div className="mt-2 rounded-lg border bg-card/60 p-4 text-sm">
+                    {examFeedback ?? 'Feedback will be published soon.'}
+                  </div>
+                )}
+              </div>
             </div>
-            <ul className="list-disc pl-5 space-y-1.5 text-xs text-muted-foreground">
-              {guidelines.map((g, idx) => (
-                <li key={idx}>{g}</li>
-              ))}
-            </ul>
-          </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
             <div className="flex items-center gap-2">
@@ -2043,11 +2012,13 @@ function ExamRound({
             </div>
             <Button
               onClick={handleStartAssessment}
-              disabled={!canStartAssessment}
-              className={`w-full sm:w-auto ${canStartAssessment ? '' : 'opacity-70'}`}
+              disabled={!isExamWindowLive}
+              className={`w-full sm:w-auto ${isExamWindowLive
+                ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
+                : 'bg-gray-200 text-gray-400 cursor-not-allowed disabled:pointer-events-auto disabled:opacity-100'
+                }`}
             >
-              {canStartAssessment ? <ExternalLink className="mr-2 h-4 w-4" /> : <ClipboardList className="mr-2 h-4 w-4" />}
-              {examStartedAt != null ? 'Exam In Progress' : canStartAssessment ? 'Start Assessment' : isBeforeStart ? 'Starts Soon' : isAfterEnd ? 'Exam Closed' : 'Start Assessment'}
+              <ClipboardList className="mr-2 h-4 w-4" /> Take Exam
             </Button>
           </div>
           {examStartedAt != null && (
@@ -2055,8 +2026,6 @@ function ExamRound({
               Your exam is in progress — complete it before the window closes. Results will appear here once submitted.
             </p>
           )}
-        </>
-      )}
 
       <Dialog open={examOpen} onOpenChange={(open) => {
         if (!open && examStarted) return
@@ -2945,7 +2914,6 @@ function CongratulationsCard({ onViewTerms }: { onViewTerms: () => void }) {
 function OfferLetterSection({
   candidate,
   offer,
-  job,
   onRespond,
   onDiscuss,
   discussOpen,
@@ -2963,19 +2931,16 @@ function OfferLetterSection({
   discussMessage: string
   onDiscussMessageChange: (value: string) => void
 }) {
-  const breakdown: MockSalaryBreakdown = offer.salary_breakdown ?? {
-    base_salary: offer.salary_offered ?? 0,
-    variable: 0,
-    allowances: 0,
-    gross_total: offer.salary_offered ?? 0,
-  }
   const responded = offer.candidate_response != null
-  const bondText = offer.service_bond_years
-    ? `A service bond of ${offer.service_bond_years} year${offer.service_bond_years > 1 ? 's' : ''} applies from your date of joining.`
-    : 'No service bond is applicable to this position.'
-  const relocationText = offer.relocation_required
-    ? `Relocation to ${offer.relocation_location ?? 'the designated office location'} is required as part of this role.`
-    : 'Relocation is not required; this role supports the company work policy (Remote / Hybrid / On-site).'
+  const pdfUrl = offer.pdf_url
+
+  const handleDownload = () => {
+    if (!pdfUrl) {
+      toast.error('The offer PDF is not available yet. Please check back shortly.')
+      return
+    }
+    window.open(pdfUrl, '_blank', 'noopener,noreferrer')
+  }
 
   return (
     <Card className="border-primary bg-primary/5">
@@ -2990,119 +2955,22 @@ function OfferLetterSection({
           <div className="flex items-center gap-2 text-sm font-semibold">
             <FileText className="h-4 w-4 text-primary" /> Official Offer Letter — Document Preview
           </div>
-          <Button variant="outline" size="sm" onClick={() => downloadOfferPdf(candidate, offer, job)}>
+          <Button variant="outline" size="sm" onClick={handleDownload}>
             <Download className="mr-2 h-4 w-4" /> Download Offer PDF
           </Button>
         </div>
 
-        <div className="overflow-x-auto rounded-lg border bg-white text-slate-900 shadow-sm">
-          <div className="mx-auto max-w-[720px] p-6 sm:p-10">
-            <div className="flex flex-wrap items-start justify-between gap-4 border-b-4 border-[#5B21B6] pb-5">
-              <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#5B21B6] text-sm font-bold text-white">OK</div>
-                <div>
-                  <div className="text-lg font-bold tracking-tight">Oklut Technologies</div>
-                  <div className="text-xs text-slate-500">A unit of Oklut Inc. · Talent Acquisition</div>
-                </div>
-              </div>
-              <div className="text-right text-xs text-slate-500">
-                <div>Offer Ref: {offer.id.toUpperCase()}</div>
-                <div>Issued: {formatDate(offer.created_at)}</div>
-              </div>
-            </div>
-
-            <h2 className="mt-6 text-center text-2xl font-bold uppercase tracking-wide">Offer of Employment</h2>
-            <p className="mt-1 text-center text-xs text-slate-500">Private &amp; Confidential</p>
-
-            <p className="mt-5 text-sm leading-relaxed">Dear {candidate.name},</p>
-            <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              We are pleased to offer you the position of <span className="font-semibold">{job?.title ?? 'Software Engineer'}</span> at Oklut Technologies, subject to the terms and conditions set out in this letter.
-            </p>
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-slate-200 p-3">
-                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Briefcase className="h-3.5 w-3.5" /> Position</div>
-                <div className="mt-1 text-sm font-medium">{job?.title ?? '—'}</div>
-              </div>
-              <div className="rounded-lg border border-slate-200 p-3">
-                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><CalendarClock className="h-3.5 w-3.5" /> Expected Joining Date</div>
-                <div className="mt-1 text-sm font-medium">{formatDate(offer.joining_date || '')}</div>
-              </div>
-              <div className="rounded-lg border border-slate-200 p-3">
-                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Lock className="h-3.5 w-3.5" /> Service Bond</div>
-                <div className="mt-1 text-sm font-medium">{offer.service_bond_years ? `${offer.service_bond_years} year${offer.service_bond_years > 1 ? 's' : ''}` : 'Not applicable'}</div>
-              </div>
-              <div className="rounded-lg border border-slate-200 p-3">
-                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><MapPin className="h-3.5 w-3.5" /> Relocation</div>
-                <div className="mt-1 text-sm font-medium">{offer.relocation_required ? 'Required' : 'Not required'}</div>
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <div className="mb-1 text-sm font-semibold">Compensation — Annual CTC</div>
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="border-b-2 border-slate-800 text-left">
-                    <th className="py-2">Component</th>
-                    <th className="py-2 text-right">Amount (INR)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-slate-700">
-                  <tr>
-                    <td className="py-2.5">Base Salary</td>
-                    <td className="py-2.5 text-right font-medium">{formatCurrency(breakdown.base_salary)}</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5">Variable Pay</td>
-                    <td className="py-2.5 text-right font-medium">{formatCurrency(breakdown.variable)}</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5">Allowances</td>
-                    <td className="py-2.5 text-right font-medium">{formatCurrency(breakdown.allowances)}</td>
-                  </tr>
-                  <tr className="border-t-2 border-slate-800 font-semibold text-slate-900">
-                    <td className="py-3">Gross Total CTC</td>
-                    <td className="py-3 text-right">{formatCurrency(breakdown.gross_total)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-6 space-y-3 text-sm">
-              <div className="flex items-start gap-2">
-                <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-[#5B21B6]" />
-                <p><span className="font-semibold">Joining Date:</span> You are expected to join on <span className="font-semibold">{formatDate(offer.joining_date || '')}</span>. Any change to this date must be communicated to HR at least 7 days in advance.</p>
-              </div>
-              <div className="flex items-start gap-2">
-                <Lock className="mt-0.5 h-4 w-4 shrink-0 text-[#5B21B6]" />
-                <p><span className="font-semibold">Service Bond:</span> {bondText}</p>
-              </div>
-              <div className="flex items-start gap-2">
-                <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#5B21B6]" />
-                <p><span className="font-semibold">Relocation:</span> {relocationText}</p>
-              </div>
-              <div className="flex items-start gap-2">
-                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#5B21B6]" />
-                <p><span className="font-semibold">Document Verification:</span> This offer is subject to successful verification of the documents submitted during your application. Any misrepresentation will result in termination of employment.</p>
-              </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#5B21B6]" />
-                <p><span className="font-semibold">Acceptance:</span> This offer remains valid for 7 days from the date of issue. Accepting the offer confirms your agreement to the terms and conditions above.</p>
-              </div>
-            </div>
-
-            <div className="mt-8 grid gap-8 sm:grid-cols-2">
-              <div>
-                <div className="border-t border-slate-300 pt-2 text-sm font-semibold">For Oklut Technologies</div>
-                <div className="mt-0.5 text-xs text-slate-500">Authorized Signatory</div>
-              </div>
-              <div>
-                <div className="border-t border-slate-300 pt-2 text-sm font-semibold">{candidate.name}</div>
-                <div className="mt-0.5 text-xs text-slate-500">Candidate Signature</div>
-              </div>
-            </div>
+        {pdfUrl ? (
+          <iframe
+            src={pdfUrl}
+            title={offer.document_title || `Offer Letter — ${candidate.name}`}
+            className="h-[600px] w-full rounded-lg border"
+          />
+        ) : (
+          <div className="flex h-[600px] w-full items-center justify-center rounded-lg border">
+            <p className="text-sm text-muted-foreground">The offer PDF is not available yet.</p>
           </div>
-        </div>
+        )}
 
         {responded && offer.candidate_response ? (
           <div className="space-y-2 rounded-lg border bg-card p-4">
@@ -3113,9 +2981,6 @@ function OfferLetterSection({
               {offer.candidate_response === 'discuss' && 'Your request to discuss terms has been recorded. Our recruitment team will get in touch with you shortly.'}
               {offer.candidate_response === 'reject' && 'You have declined the job offer. We wish you the best in your future endeavors.'}
             </p>
-            <Button variant="outline" size="sm" onClick={() => downloadOfferPdf(candidate, offer, job)}>
-              <Download className="mr-2 h-4 w-4" /> Download Offer PDF
-            </Button>
           </div>
         ) : (
           <>
