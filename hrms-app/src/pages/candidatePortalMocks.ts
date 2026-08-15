@@ -53,7 +53,7 @@ export interface MockCandidate {
   name: string
   email: string
   category: 'Fresher' | 'Experienced'
-  status: 'applied' | 'rejected' | 'hired'
+  status: 'applied' | 'rejected' | 'hired' | 'passed' | 'failed' | 'booked' | 'scheduled' | 'ongoing' | 'cancelled' | 'proposed' | 'completed'
   applied_at: string
   created_at: string
   exam_score: number | null
@@ -116,7 +116,12 @@ export interface MockOffer {
   id: string
   candidate_id: string
   job_opening_id: string | null
-  offer_letter_url: string | null
+  // Admin-published offer document — the portal embeds/downloads this PDF.
+  pdf_url: string | null
+  document_title: string
+  // Admin-authored Terms & Conditions content and checklist.
+  terms_content_html: string
+  terms_checkbox_labels: Array<string | null>
   salary_offered: number
   joining_date: string
   service_bond_years: number | null
@@ -148,6 +153,9 @@ export interface PortalSnapshot {
   interviews: MockInterview[]
   slots: MockInterviewSlot[]
   offer: MockOffer | null
+  // Admin-authored Terms & Conditions used before an offer document exists.
+  terms_content_html?: string
+  terms_checkbox_labels?: Array<string | null>
 }
 
 // ---------------------------------------------------------------------------
@@ -161,17 +169,17 @@ const fresherBase = (overrides: Partial<MockCandidate> = {}): MockCandidate => (
   name: 'Ananya Sharma',
   email: 'ananya.sharma@example.com',
   category: 'Fresher',
-  status: 'applied',
+  status: 'passed',
   applied_at: iso(-6 * DAY),
   created_at: iso(-6 * DAY),
-  exam_score: null,
-  exam_completed_at: null,
-  exam_started_at: null,
-  exam_feedback: null,
-  technical_interview_status: null,
+  exam_score: 85, // 85% score
+  exam_started_at: iso(-2 * DAY),
+  exam_completed_at: iso(-2 * DAY + 45 * 60 * 1000), // Completed 45 mins later
+  exam_feedback: 'Qualified for Technical Interview round.',
+  technical_interview_status: 'scheduled', // Matched standard portal enum ('scheduled' | 'ongoing' | 'passed' | 'failed')
   technical_interview_feedback: null,
-  technical_interview_time: null,
-  technical_interview_date: null,
+  technical_interview_time: iso(2 * DAY + 45 * 60 * 1000),
+  technical_interview_date: iso(2 * DAY + 45 * 60 * 1000),
   technical_interview_rescheduled: null,
   hr_interview_status: null,
   hr_interview_feedback: null,
@@ -294,6 +302,45 @@ const publishedSlots = (
     booked: bookedCount,
   }))
 
+// ---------------------------------------------------------------------------
+// Admin-published offer assets — the portal renders these exactly as provided
+// (embedded PDF, HTML terms body, and the acceptance checklist).
+// ---------------------------------------------------------------------------
+
+// Stable public sample PDF so the embedded preview renders in the demo.
+const OFFER_PDF_URL = 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'
+
+const OFFER_TERMS_HTML = `
+  <div class="mb-3">
+    <div class="mb-1 font-semibold">Service Bond & Policies</div>
+    <p class="text-muted-foreground">As part of this offer you agree to serve the service bond set out in your appointment letter. Early separation within the bond period is governed by the bond terms communicated by the HR team.</p>
+  </div>
+  <div class="mb-3">
+    <div class="mb-1 font-semibold">Document Verification</div>
+    <p class="text-muted-foreground">All documents submitted during the application and onboarding process must be genuine and verifiable. Any discrepancy discovered at any stage will result in termination of employment and legal action as applicable.</p>
+  </div>
+  <div class="mb-3">
+    <div class="mb-1 font-semibold">Workplace Policy</div>
+    <p class="text-muted-foreground">This role supports the company work policy (Remote / Hybrid / On-site) as per role requirements. Your work mode may be adjusted by the company with due notice.</p>
+  </div>
+  <div class="mb-3">
+    <div class="mb-1 font-semibold">Code of Conduct</div>
+    <p class="text-muted-foreground">You agree to uphold the company code of conduct, including confidentiality of company and client information, compliance with security policies, non-disclosure agreements, and professional behaviour consistent with company values.</p>
+  </div>
+  <div class="mb-3">
+    <div class="mb-1 font-semibold">Compensation & Joining</div>
+    <p class="text-muted-foreground">Your annual CTC and expected joining date are communicated in the offer document. The breakdown is indicative; the final structure will be confirmed in your appointment letter.</p>
+  </div>
+`
+
+const OFFER_TERMS_LABELS: Array<string | null> = [
+  'I agree to the service bond duration and policies.',
+  'I confirm that all uploaded documents are genuine.',
+  'I accept the workplace policy (Remote / Hybrid / On-site).',
+  'I accept the company code of conduct.',
+  'I agree to the offered compensation (CTC) structure and joining date as mentioned in the offer letter.',
+]
+
 const buildOffer = (
   candidate: MockCandidate,
   job: MockJobOpening,
@@ -302,7 +349,10 @@ const buildOffer = (
   id: 'offer-001',
   candidate_id: candidate.id,
   job_opening_id: job.id,
-  offer_letter_url: null,
+  pdf_url: OFFER_PDF_URL,
+  document_title: 'Offer of Employment',
+  terms_content_html: OFFER_TERMS_HTML,
+  terms_checkbox_labels: OFFER_TERMS_LABELS,
   salary_offered: 600000,
   joining_date: iso(30 * DAY),
   service_bond_years: 2,
@@ -814,6 +864,8 @@ export const MOCK_SCENARIOS: PortalSnapshot[] = [
     ],
     slots: [],
     offer: null,
+    terms_content_html: OFFER_TERMS_HTML,
+    terms_checkbox_labels: OFFER_TERMS_LABELS,
   },
   {
     id: 'fresher-offer-ready',
@@ -821,6 +873,9 @@ export const MOCK_SCENARIOS: PortalSnapshot[] = [
     description: 'All rounds cleared + offer letter ready — T&C modal gates the offer letter.',
     group: 'Offer & Onboarding',
     candidate: fresherBase({
+      candidate_id: 'CAND-FR-2026-004',
+      name: 'Sneha Reddy',
+      email: 'sneha.reddy@example.com',
       exam_started_at: iso(-6 * DAY),
       exam_completed_at: iso(-6 * DAY + HOUR),
       exam_score: 36,
@@ -1004,6 +1059,9 @@ export const MOCK_SCENARIOS: PortalSnapshot[] = [
     description: 'Malpractice / AI-tool violation at the exam stage — pipeline frozen.',
     group: 'Outcome',
     candidate: fresherBase({
+      candidate_id: 'CAND-DQ-2026-003',
+      name: 'Karan Mehta',
+      email: 'karan.mehta@example.com',
       status: 'rejected',
       malpractice_flag: true,
       cheating_detected: true,
@@ -1052,8 +1110,59 @@ export const MOCK_SCENARIOS: PortalSnapshot[] = [
   },
 ]
 
-// Default scenario loaded on demo login.
-export const DEFAULT_SCENARIO: PortalSnapshot = MOCK_SCENARIOS[0]
+// Default scenario loaded on demo login — an all-rounds-cleared candidate so
+// the portal opens on the Offer stage (T&C modal → offer letter).
+export const DEFAULT_SCENARIO: PortalSnapshot =
+  MOCK_SCENARIOS.find((s) => s.id === 'fresher-offer-ready') ?? MOCK_SCENARIOS[0]
+
+// ---------------------------------------------------------------------------
+// Candidate profiles — the four demo identities exposed by the login screen's
+// "Candidate Profile / Journey Selector". Each profile maps to one snapshot
+// so a selection (or a matching Candidate ID) loads the exact journey.
+// ---------------------------------------------------------------------------
+
+export interface CandidateProfile {
+  id: string
+  label: string
+  candidate_id: string
+  scenarioId: string
+  description: string
+}
+
+export const CANDIDATE_PROFILES: CandidateProfile[] = [
+  {
+    id: 'profile-fresher-exam',
+    label: 'Candidate 1 · Fresher — Exam Scheduled',
+    candidate_id: 'CAND-FR-2026-001',
+    scenarioId: 'fresher-fresh',
+    description: 'Stage 1 Online Exam scheduled — exam overview, metadata grid & proctoring rules.',
+  },
+  {
+    id: 'profile-exp-tech',
+    label: 'Candidate 2 · Experienced — Tech Round Slot Booking',
+    candidate_id: 'CAND-EX-2026-014',
+    scenarioId: 'exp-fresh',
+    description: '2-round pipeline — Technical interview slot pickers are open.',
+  },
+  {
+    id: 'profile-dq-exam',
+    label: 'Candidate 3 · Disqualified — Malpractice Detected',
+    candidate_id: 'CAND-DQ-2026-003',
+    scenarioId: 'fresher-dq-exam',
+    description: 'Isolated red failure banner — pipeline frozen at Stage 1.',
+  },
+  {
+    id: 'profile-offer-ready',
+    label: 'Candidate 4 · All Stages Cleared — Offer Letter',
+    candidate_id: 'CAND-FR-2026-004',
+    scenarioId: 'fresher-offer-ready',
+    description: 'All rounds cleared — Terms & Conditions modal unlocks the PDF offer letter.',
+  },
+]
+
+export function getScenarioById(id: string): PortalSnapshot | null {
+  return MOCK_SCENARIOS.find((s) => s.id === id) ?? null
+}
 
 // ---------------------------------------------------------------------------
 // Offer factory — synthesized offer record when the snapshot has none but all
@@ -1066,7 +1175,10 @@ export function buildMockOffer(candidate: MockCandidate, job: MockJobOpening, ov
     id: 'mock-offer',
     candidate_id: candidate.id,
     job_opening_id: job.id,
-    offer_letter_url: null,
+    pdf_url: OFFER_PDF_URL,
+    document_title: 'Offer of Employment',
+    terms_content_html: OFFER_TERMS_HTML,
+    terms_checkbox_labels: OFFER_TERMS_LABELS,
     salary_offered: 600000,
     joining_date: new Date(Date.now() + 30 * DAY).toISOString(),
     service_bond_years: 2,
