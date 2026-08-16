@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { createBrowserRouter, Route, createRoutesFromElements } from 'react-router-dom'
+import { createHashRouter, Route, createRoutesFromElements } from 'react-router-dom'
 import { AppShell } from '@/components/layout/app-shell'
 import { ProtectedRoute } from '@/components/auth/protected-route'
 import { PageSkeleton } from '@/components/shared/skeletons'
@@ -46,9 +46,15 @@ function withSuspense(node: React.ReactNode) {
   )
 }
 
-export const router = createBrowserRouter(
+// Hash-based routing so GitHub Pages (https://riri.dev.github.io/oklut_1)
+// serves the SPA without 404s on refresh — URLs live after the '#', e.g.
+// https://riri.dev.github.io/oklut_1/#/portal.
+export const router = createHashRouter(
   createRoutesFromElements(
     <>
+      <Route path="/" element={withSuspense(<CandidatePortalPage />)} />
+      <Route path="/portal" element={withSuspense(<CandidatePortalPage />)} />
+      <Route path="/candidate-portal" element={withSuspense(<CandidatePortalPage />)} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/careers" element={withSuspense(<CareersPage />)} />

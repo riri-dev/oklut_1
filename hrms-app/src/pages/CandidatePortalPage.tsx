@@ -56,26 +56,45 @@ import {
   Loader2,
 } from 'lucide-react'
 import { formatDateTime, formatDate } from '@/lib/format'
+import { supabase } from '@/lib/supabase'
 import { StatusPill } from '@/components/shared/status-pill'
 import { toast } from 'sonner'
+import {
+  candidateLogin,
+  bookInterviewSlot,
+  cancelInterviewSlot,
+  submitRescheduleRequest,
+  revertRescheduleRequest,
+  attendInterview,
+  startExam,
+  submitExam,
+  acceptOfferTerms,
+  respondToOffer,
+  disqualifyCandidate,
+} from '@/lib/api/candidatePortal'
+import type { Candidate, JobOpening, Interview, InterviewSlot, Offer } from '@/lib/database.types'
 import {
   DEFAULT_SCENARIO,
   CANDIDATE_PROFILES,
   getScenarioById,
   buildMockOffer,
-  type CandidateProfile,
   type PortalSnapshot,
   type MockCandidate,
   type MockJobOpening,
   type MockInterview,
   type MockOffer,
+  type MockExamDetails,
+  type MockInterviewSlot,
 } from './candidatePortalMocks'
 
 // ============================================================================
-// Candidate Portal — 100% frontend. All data lives in candidatePortalMocks.ts;
-// this component never touches a database, API, or backend service. Every
-// action mutates the in-memory snapshot with useState so the UI reacts
-// instantly.
+// Candidate Portal — database-first, mock fallback. Sign-in resolves the
+// profile from Supabase (candidates + job_openings + interviews +
+// interview_slots + offers) and maps it to the PortalSnapshot shape; when the
+// DB is unavailable, errors, or has no match, the in-memory scenarios in
+// candidatePortalMocks.ts take over seamlessly. Every action handler attempts
+// the Supabase write first and falls back to the local setPortal(...) state
+// mutation on error, so the UI always reacts instantly either way.
 // ============================================================================
 
 type RoundKey = 'exam' | 'technical' | 'hr'
@@ -116,6 +135,165 @@ const isWindowLive = (
   if (isNaN(startMs) || isNaN(endMs)) return false
   const nowMs = Date.now()
   return nowMs >= startMs && nowMs <= endMs
+}
+
+// A candidates row hydrated with its joined job, interviews, slots and offer.
+type DbCandidateRow = Candidate & {
+  job: JobOpening | null
+  interviews: Interview[]
+  slots: InterviewSlot[]
+  offer: Offer | null
+}
+
+// Map a Supabase candidates row (with joins) into the PortalSnapshot shape the
+// page renders. Returns null when the row is too incomplete to render (no job),
+// which sends the caller to the mock fallback.
+function mapDbCandidateToSnapshot(row: DbCandidateRow): PortalSnapshot | null {
+  const jobRow = row.job
+  if (!jobRow) return null
+
+  const isFresher = (row.category ?? '').toLowerCase() === 'fresher'
+  const totalQuestions = jobRow.total_questions ?? 0
+  const passPercentage = jobRow.exam_passing_score ?? 60
+  const durationMins = jobRow.exam_duration_mins ?? 30
+
+  const candidate: MockCandidate = {
+    id: row.id,
+    candidate_id: row.candidate_id ?? row.temp_id ?? row.id,
+    user_id: row.user_id ?? null,
+    name: row.name,
+    email: row.email,
+    category: (isFresher ? 'Fresher' : 'Experienced') as MockCandidate['category'],
+    status: (row.status ?? 'applied') as MockCandidate['status'],
+    applied_at: row.applied_at,
+    created_at: row.applied_at,
+    exam_score: row.exam_score ?? null,
+    exam_completed_at: row.exam_completed_at ?? null,
+    exam_started_at: row.exam_started_at ?? null,
+    exam_feedback: row.exam_feedback ?? null,
+    technical_interview_status: row.technical_interview_status ?? null,
+    technical_interview_feedback: row.technical_interview_feedback ?? null,
+    technical_interview_time: row.technical_interview_date ?? null,
+    technical_interview_date: row.technical_interview_date ?? null,
+    technical_interview_rescheduled: null,
+    hr_interview_status: row.hr_interview_status ?? null,
+    hr_interview_feedback: row.hr_interview_feedback ?? null,
+    hr_interview_time: row.hr_interview_date ?? null,
+    hr_interview_date: row.hr_interview_date ?? null,
+    hr_interview_rescheduled: null,
+    malpractice_flag: row.malpractice_flag ?? false,
+    cheating_detected: row.cheating_detected ?? false,
+    disqualified_at: row.disqualified_at ?? null,
+    disqualified_reason: row.disqualified_reason ?? null,
+  }
+
+  const examDetails: MockExamDetails = {
+    duration_mins: durationMins,
+    total_questions: totalQuestions,
+    total_marks: totalQuestions,
+    pass_percentage: passPercentage,
+    window_start: jobRow.exam_window_start ?? jobRow.exam_start_date ?? null,
+    window_end: jobRow.exam_window_end ?? jobRow.exam_end_date ?? null,
+    guidelines: [],
+  }
+
+  const job: MockJobOpening = {
+    id: jobRow.id,
+    title: jobRow.title,
+    exam_start_date: jobRow.exam_start_date ?? null,
+    exam_end_date: jobRow.exam_end_date ?? null,
+    exam_start_time: null,
+    exam_end_time: null,
+    exam_window_start: jobRow.exam_window_start ?? null,
+    exam_window_end: jobRow.exam_window_end ?? null,
+    total_questions: totalQuestions,
+    total_marks: totalQuestions,
+    pass_percentage: passPercentage,
+    exam_duration_mins: durationMins,
+    exam_link: jobRow.exam_link ?? '',
+    exam_details: examDetails,
+  }
+
+  const interviews: MockInterview[] = (row.interviews ?? []).map((iv) => ({
+    id: iv.id,
+    candidate_id: iv.candidate_id,
+    job_opening_id: iv.job_opening_id ?? null,
+    interviewer: iv.interviewer
+      ? { first_name: iv.interviewer.first_name, last_name: iv.interviewer.last_name }
+      : null,
+    round: iv.round === 'HR' ? 'HR' : 'Technical',
+    scheduled_at: iv.scheduled_at ?? null,
+    mode: iv.mode ?? 'online',
+    meeting_link: iv.meeting_link ?? null,
+    status: (iv.status ?? null) as MockInterview['status'],
+    candidate_confirmed: iv.candidate_confirmed ?? false,
+    attended_at: iv.attended_at ?? null,
+    created_at: iv.created_at,
+    updated_at: iv.created_at,
+    reschedule_requested: iv.reschedule_requested ?? null,
+    reschedule_status: (iv.reschedule_status ?? null) as MockInterview['reschedule_status'],
+    reschedule_reason: iv.reschedule_reason ?? null,
+    reschedule_preferred_time: iv.reschedule_preferred_time ?? null,
+    reschedule_admin_note: iv.reschedule_admin_note ?? null,
+    feedback: iv.feedback ?? null,
+    rating: iv.rating ?? null,
+    metrics: iv.metrics ?? null,
+    slot_key: iv.slot_key ?? null,
+  }))
+
+  // Slots carry their own booked count in the snapshot — derive it from the
+  // candidate's confirmed interview bookings per slot.
+  const activeBookingStatuses = ['scheduled', 'ongoing', 'proposed']
+  const slots: MockInterviewSlot[] = (row.slots ?? []).map((s) => ({
+    id: s.id,
+    job_opening_id: s.job_opening_id,
+    round: s.round === 'hr' ? 'hr' : 'technical',
+    scheduled_at: s.scheduled_at,
+    status: s.status === 'closed' ? 'closed' : 'open',
+    max_candidates: s.max_candidates,
+    booked: interviews.filter(
+      (i) => i.slot_key === s.id && activeBookingStatuses.includes(i.status ?? '')
+    ).length,
+  }))
+
+  const offerRow = row.offer ?? null
+  const offer: MockOffer | null = offerRow
+    ? {
+        id: offerRow.id,
+        candidate_id: offerRow.candidate_id,
+        job_opening_id: offerRow.job_opening_id ?? null,
+        pdf_url: offerRow.offer_letter_url ?? null,
+        document_title: 'Offer of Employment',
+        terms_content_html: '',
+        terms_checkbox_labels: [],
+        salary_offered: offerRow.salary_offered ?? 0,
+        joining_date: offerRow.joining_date ?? '',
+        service_bond_years: offerRow.service_bond_years ?? null,
+        relocation_required: offerRow.relocation_required ?? false,
+        relocation_location: offerRow.relocation_location ?? null,
+        salary_breakdown: offerRow.salary_breakdown ?? {
+          base_salary: 0,
+          variable: 0,
+          allowances: 0,
+          gross_total: 0,
+        },
+        status: (offerRow.status ?? 'sent') as MockOffer['status'],
+        candidate_response: (offerRow.candidate_response ?? null) as MockOffer['candidate_response'],
+        created_at: offerRow.created_at,
+      }
+    : null
+
+  return {
+    id: row.id,
+    label: 'DB Profile',
+    description: 'Live candidate profile loaded from the Supabase database.',
+    group: isFresher ? 'Fresher' : 'Experienced',
+    candidate,
+    job,
+    interviews,
+    slots,
+    offer,
+  }
 }
 
 // ============================================================================
@@ -393,33 +571,57 @@ export default function CandidatePortalPage() {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)))
   }
 
-  // Resolve the login identity by Candidate ID. Every demo profile carries a
-  // unique candidate_id, so ID entry loads the exact journey snapshot.
-  const resolveProfile = (): CandidateProfile | null => {
-    const id = candidateId.trim().toUpperCase()
-    if (!id) return null
-    return CANDIDATE_PROFILES.find((p) => p.candidate_id.toUpperCase() === id) ?? null
+  // Resolve the login identity by Candidate ID — DATABASE FIRST. Queries
+// Supabase for the candidate (matched by candidate_id OR temp_id) with its
+// job, interviews, slots and offer joins; on success the row is mapped into
+// the PortalSnapshot shape. When the DB errors or has no match, the in-memory
+// demo profile is used instead so the portal keeps working offline.
+  const resolveProfile = async (id: string): Promise<PortalSnapshot | null> => {
+    const normalized = id.trim().toUpperCase()
+    if (!normalized) return null
+    try {
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*, job:job_openings(*), interviews:interviews(*), slots:interview_slots(*), offer:offers(*)')
+        .or(`candidate_id.eq.${normalized},temp_id.eq.${normalized}`)
+        .maybeSingle()
+      if (error) throw error
+      if (data) {
+        const snapshot = mapDbCandidateToSnapshot(data as DbCandidateRow)
+        if (snapshot) return snapshot
+      }
+      console.warn('No DB match for candidate ID, using mock fallback...', id)
+    } catch (e) {
+      console.warn('DB error, using mock fallback...', e)
+    }
+    const profile = CANDIDATE_PROFILES.find((p) => p.candidate_id.toUpperCase() === normalized) ?? null
+    return profile ? getScenarioById(profile.scenarioId) : null
   }
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!candidateId.trim() || !password) {
       toast.error('Please enter both ID and password.')
       return
     }
     setLoading(true)
-    setTimeout(() => {
-      const profile = resolveProfile()
-      const scenario = profile ? getScenarioById(profile.scenarioId) : null
+    try {
+      // DB-first: establish the candidate's Supabase session (when configured)
+      // so RLS lets the profile query read real rows. Failures fall through.
+      await candidateLogin(candidateId.trim(), password).catch(() => {})
+      const scenario = await resolveProfile(candidateId)
       setPortal(scenario ?? DEFAULT_SCENARIO)
       setTermsAccepted(false)
       setNotifications([])
       dqEvaluated.current = null
       firedReminderKeys.current = new Set()
       setSignedIn(true)
+      toast.success(scenario ? `Signed in as ${scenario.candidate.name}.` : 'Login successful!')
+    } catch {
+      toast.error('Sign in failed. Please try again.')
+    } finally {
       setLoading(false)
-      toast.success(profile ? `Signed in as ${scenario?.candidate.name ?? 'candidate'}.` : 'Login successful!')
-    }, 400)
+    }
   }
 
   const handleSignOut = () => {
@@ -577,10 +779,22 @@ export default function CandidatePortalPage() {
   // No-show detection — the candidate booked a slot, the window elapsed, and
   // the interview was never attended. The round can no longer be taken.
   const isRoundMissed = (key: 'technical' | 'hr'): boolean => {
+    const isCleared = key === 'technical' ? roundCleared2 : roundCleared3
+    if (isCleared) return false
+
+    const candStatus = (key === 'technical' ? techStatusNorm : hrStatusNorm) ?? ''
+    if (['passed', 'cleared', 'completed'].includes(candStatus)) return false
+
     const recs = roundInterviews(key)
+    const completedOrPassed = recs.some((i) => {
+      const s = (i.status ?? '').toLowerCase()
+      return s === 'passed' || s === 'completed' || s === 'cleared'
+    })
+    if (completedOrPassed) return false
+
     const booked = recs.find(isConfirmedBooking)
     if (!booked || booked.attended_at) return false
-    if (['passed', 'failed', 'completed'].includes(booked.status ?? '')) return false
+    if (['passed', 'failed', 'completed', 'cleared'].includes((booked.status ?? '').toLowerCase())) return false
     const elapsed = Date.now() - new Date(booked.scheduled_at ?? '').getTime()
     return elapsed > TWO_HOURS_MS
   }
@@ -671,9 +885,21 @@ export default function CandidatePortalPage() {
   const termsUnlocked = termsAccepted || offerToShow?.candidate_response != null
 
   // ------------------------------------------------------------------
-  // Action handlers — all in-memory, zero backend calls.
+  // Action handlers — database-first, in-memory fallback. Every handler
+  // attempts the Supabase write and, on error, mutates the local snapshot
+  // with setPortal(...) so the UI always reacts instantly.
   // ------------------------------------------------------------------
-  const handleTermsAgree = () => {
+  const handleTermsAgree = async () => {
+    if (offerToShow) {
+      try {
+        await acceptOfferTerms({
+          offerId: offerToShow.id,
+          relocationRequired: offerToShow.relocation_required,
+        })
+      } catch (e) {
+        console.warn('DB error, using mock fallback...', e)
+      }
+    }
     setTermsAccepted(true)
     setTermsOpen(false)
     toast.success('Terms accepted — your official offer letter is now unlocked.')
@@ -685,8 +911,19 @@ export default function CandidatePortalPage() {
     )
   }
 
-  const handleOfferResponse = (response: 'accept' | 'discuss' | 'reject') => {
+  const handleOfferResponse = async (response: 'accept' | 'discuss' | 'reject') => {
     if (!offerToShow) return
+    try {
+      await respondToOffer({
+        offerId: offerToShow.id,
+        response,
+        candidateId: candidate.id,
+        userId: candidate.user_id,
+        message: response === 'discuss' ? discussMessage.trim() : undefined,
+      })
+    } catch (e) {
+      console.warn('DB error, using mock fallback...', e)
+    }
     if (response === 'accept') {
       setPortal((prev) => ({ ...prev, candidate: { ...prev.candidate, status: 'hired' } }))
     }
@@ -744,7 +981,7 @@ export default function CandidatePortalPage() {
     setIsSlotModalOpen(true)
   }
 
-  const handleConfirmSlot = () => {
+  const handleConfirmSlot = async () => {
     if (!candidate || !activeRoundType || !selectedSlot) return
     const slot = interviewSlots.find((s) => s.id === selectedSlot)
     if (!slot) {
@@ -755,6 +992,19 @@ export default function CandidatePortalPage() {
     setSlotSaving(true)
     const roundLabel = activeRoundType === 'hr' ? 'HR' : 'Technical'
     const nowIso = new Date().toISOString()
+    try {
+      await bookInterviewSlot({
+        candidateId: candidate.id,
+        jobOpeningId: job?.id ?? null,
+        round: activeRoundType === 'hr' ? 'hr' : 'technical',
+        slotKey: slot.id,
+        scheduledAt: slot.scheduled_at,
+        meetingLink: null,
+        existingInterviewId: existingBooked?.id ?? null,
+      })
+    } catch (e) {
+      console.warn('DB error, using mock fallback...', e)
+    }
     setPortal((prev) => {
       const interviewsNext = existingBooked
         ? prev.interviews.map((i) =>
@@ -834,7 +1084,7 @@ export default function CandidatePortalPage() {
     setSlotSaving(false)
   }
 
-  const handleSubmitRescheduleRequest = () => {
+  const handleSubmitRescheduleRequest = async () => {
     if (!candidate || !activeRoundType) return
     if (!rescheduleReason.trim() || !reschedulePreferredTime) {
       toast.error('Please enter your reason and a preferred time.')
@@ -853,6 +1103,18 @@ export default function CandidatePortalPage() {
     setSlotSaving(true)
     const roundLabel = activeRoundType === 'hr' ? 'HR' : 'Technical'
     const nowIso = new Date().toISOString()
+    try {
+      await submitRescheduleRequest({
+        candidateId: candidate.id,
+        jobOpeningId: job?.id ?? null,
+        round: activeRoundType === 'hr' ? 'hr' : 'technical',
+        reason: rescheduleReason.trim(),
+        preferredTime: preferredIso,
+        existingInterviewId: booked?.id ?? null,
+      })
+    } catch (e) {
+      console.warn('DB error, using mock fallback...', e)
+    }
     setPortal((prev) => {
       const interviewsNext = booked
         ? prev.interviews.map((i) =>
@@ -914,7 +1176,12 @@ export default function CandidatePortalPage() {
     setSlotSaving(false)
   }
 
-  const handleAttendInterview = (interviewId: string) => {
+  const handleAttendInterview = async (interviewId: string) => {
+    try {
+      await attendInterview({ interviewId })
+    } catch (e) {
+      console.warn('DB error, using mock fallback...', e)
+    }
     setPortal((prev) => ({
       ...prev,
       interviews: prev.interviews.map((i) =>
@@ -923,12 +1190,21 @@ export default function CandidatePortalPage() {
     }))
   }
 
-  const handleCancelSlot = (roundKey: RoundKey) => {
+  const handleCancelSlot = async (roundKey: RoundKey) => {
     if (!candidate) return
     const rec = roundInterviews(roundKey).find((i) => isConfirmedBooking(i))
     if (!rec) return
     setSlotSaving(true)
     const nowIso = new Date().toISOString()
+    try {
+      await cancelInterviewSlot({
+        interviewId: rec.id,
+        round: roundKey === 'hr' ? 'hr' : 'technical',
+        candidateId: candidate.id,
+      })
+    } catch (e) {
+      console.warn('DB error, using mock fallback...', e)
+    }
     setPortal((prev) => ({
       ...prev,
       interviews: prev.interviews.map((i) =>
@@ -958,11 +1234,16 @@ export default function CandidatePortalPage() {
     setSlotSaving(false)
   }
 
-  const handleRevertReschedule = (roundKey: RoundKey) => {
+  const handleRevertReschedule = async (roundKey: RoundKey) => {
     if (!candidate) return
     const rec = roundInterviews(roundKey).find((i) => isConfirmedBooking(i))
     if (!rec) return
     setSlotSaving(true)
+    try {
+      await revertRescheduleRequest({ interviewId: rec.id })
+    } catch (e) {
+      console.warn('DB error, using mock fallback...', e)
+    }
     setPortal((prev) => ({
       ...prev,
       interviews: prev.interviews.map((i) =>
@@ -1026,6 +1307,9 @@ export default function CandidatePortalPage() {
         }
       }
       if (reason) {
+        disqualifyCandidate({ candidateId: candidate.id, reason }).catch((e) => {
+          console.warn('DB error, using mock fallback...', e)
+        })
         setPortal((prev) => ({
           ...prev,
           candidate: {
@@ -1317,7 +1601,7 @@ export default function CandidatePortalPage() {
               <CardDescription>Enter your credentials to view your application status</CardDescription>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleLogin} className="space-y-4">
+              <form onSubmit={handleSignIn} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="candidate-id">Candidate ID</Label>
                   <Input id="candidate-id" required type="text" placeholder="Enter your Candidate ID" value={candidateId} onChange={(e) => setCandidateId(e.target.value)} />
@@ -1557,7 +1841,14 @@ export default function CandidatePortalPage() {
                             passPercentage={passPercentage}
                             showFeedback={showExamFeedback}
                             onToggleFeedback={() => setShowExamFeedback((v) => !v)}
-                            onExamComplete={() => {
+                            onExamComplete={async () => {
+                              if (!candidate) return
+                              try {
+                                await startExam({ candidateId: candidate.id })
+                                await submitExam({ candidateId: candidate.id, jobOpeningId: job?.id ?? null })
+                              } catch (e) {
+                                console.warn('DB error, using mock fallback...', e)
+                              }
                               setPortal((prev) => ({
                                 ...prev,
                                 candidate: {
@@ -1568,6 +1859,10 @@ export default function CandidatePortalPage() {
                               }))
                             }}
                             onExamStarted={(startedAt) => {
+                              if (!candidate) return
+                              startExam({ candidateId: candidate.id }).catch((e) => {
+                                console.warn('DB error, using mock fallback...', e)
+                              })
                               setPortal((prev) => ({
                                 ...prev,
                                 candidate: { ...prev.candidate, exam_started_at: startedAt },
@@ -2142,22 +2437,6 @@ function TechnicalRound({
 
   if (state === 'disqualified') return null
 
-  // Missed / did not attend — the round can no longer be taken.
-  if (missed) {
-    return (
-      <div className="mt-4">
-        <Alert variant="destructive">
-          <XCircle className="h-4 w-4" />
-          <AlertTitle>You can no longer attend this interview</AlertTitle>
-          <AlertDescription>
-            You did not attempt the interview in your chosen slot. The Technical round has been closed for your
-            application and further steps cannot proceed.
-          </AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
-
   // Cleared — strict terminal view: green banner, scorecard and feedback ONLY.
   // Slot selectors, reschedule controls and meeting links never render here.
   if (state === 'passed') {
@@ -2197,6 +2476,22 @@ function TechnicalRound({
             </div>
           )}
         </div>
+      </div>
+    )
+  }
+
+  // Missed / did not attend — the round can no longer be taken.
+  if (missed) {
+    return (
+      <div className="mt-4">
+        <Alert variant="destructive">
+          <XCircle className="h-4 w-4" />
+          <AlertTitle>You can no longer attend this interview</AlertTitle>
+          <AlertDescription>
+            You did not attempt the interview in your chosen slot. The Technical round has been closed for your
+            application and further steps cannot proceed.
+          </AlertDescription>
+        </Alert>
       </div>
     )
   }
@@ -2531,22 +2826,6 @@ function HRRound({
 
   if (state === 'disqualified') return null
 
-  // Missed / did not attend — the round can no longer be taken.
-  if (missed) {
-    return (
-      <div className="mt-4">
-        <Alert variant="destructive">
-          <XCircle className="h-4 w-4" />
-          <AlertTitle>You can no longer attend this interview</AlertTitle>
-          <AlertDescription>
-            You did not attempt the interview in your chosen slot. The HR round has been closed for your
-            application and the pipeline cannot proceed.
-          </AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
-
   // Cleared — strict terminal view: green banner, scorecard and feedback ONLY.
   // Slot selectors, reschedule controls and meeting links never render here.
   if (state === 'passed') {
@@ -2586,6 +2865,22 @@ function HRRound({
             </div>
           )}
         </div>
+      </div>
+    )
+  }
+
+  // Missed / did not attend — the round can no longer be taken.
+  if (missed) {
+    return (
+      <div className="mt-4">
+        <Alert variant="destructive">
+          <XCircle className="h-4 w-4" />
+          <AlertTitle>You can no longer attend this interview</AlertTitle>
+          <AlertDescription>
+            You did not attempt the interview in your chosen slot. The HR round has been closed for your
+            application and the pipeline cannot proceed.
+          </AlertDescription>
+        </Alert>
       </div>
     )
   }

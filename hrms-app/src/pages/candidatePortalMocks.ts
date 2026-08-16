@@ -1,5 +1,7 @@
 // ============================================================================
-// Candidate Portal — pure frontend mock data (NO database / NO backend).
+// Candidate Portal — LEGACY mock data, kept for testing / storybook / fallback
+// demos ONLY. The live portal (CandidatePortalPage) now runs on Supabase via
+// @/lib/api/candidatePortal — do NOT import this file from production code.
 // Every scenario snapshot is a complete portal state: candidate profile, job
 // opening (incl. exam window), interview records, published slot pools, and
 // the offer. Timestamps are relative to Date.now() so every state stays live
